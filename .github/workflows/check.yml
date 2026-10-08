@@ -1,0 +1,26 @@
+name: Check
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck openssh-server
+          sudo install -d -m 0755 /run/sshd
+      - name: Check Bash
+        run: |
+          bash -n bin/deploy-slot libexec/install-skill.sh install.sh
+          shellcheck bin/deploy-slot libexec/install-skill.sh install.sh
+      - name: Test reservations, installation and SSH
+        run: python3 -m unittest discover -s tests -v

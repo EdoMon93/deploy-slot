@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export LC_ALL=C
+umask 007
+
+fail() {
+    printf 'deploy-slot: %s\n' "$*" >&2
+    exit 2
+}
+
+usage() {
+    cat <<'EOF'
+Usage: deploy-slot reserve
+       deploy-slot status
+       deploy-slot release [--force]
+       deploy-slot install-skill [REPO]
+
+Reserves the machine this command runs on. Invoke it using ordinary SSH.
+Ownership comes from CODEX_THREAD_ID or CLAUDE_CODE_SESSION_ID.
+Reservations remain until released; deployment commands are not intercepted.
+
+Exit codes: 0 success, 1 owned by another session, 2 usage or operational error.
+EOF
+}
+
+resolve_owner() {
+    local codex="${CODEX_THREAD_ID:-}" claude="${CLAUDE_CODE_SESSION_ID:-}" identity
+    if [[ -n "$codex" && -n "$claude" ]]; then
+        fail 'Both provider session IDs are present; unset the inherited ID of the other provider.'
+    elif [[ -n "$claude" ]]; then
+        identity="$claude"
+        caller="claude:$identity"
+    elif [[ -n "$codex" ]]; then
+        identity="$codex"
+        caller="codex:$identity"
+    else
+        fail 'Missing session identity. Forward CODEX_THREAD_ID or CLAUDE_CODE_SESSION_ID through SSH.'
+    fi
+    [[ "$identity" =~ ^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$ ]] || fail 'Invalid provider session ID.'
+}
+
+command="${1:---help}"
+if (($#)); then shift; fi
+force=0
+case "$command" in
+    --help|-h|help)
+        (($# == 0)) || fail 'Unexpected arguments.'
+        usage
+        exit 0
+        ;;
+    install-skill)
+        (($# <= 1)) || fail 'Usage: deploy-slot install-skill [REPO]'
+        script_dir="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
+        if [[ -f "$script_dir/../skills/deploy-slot/SKILL.md" && -f "$script_dir/../libexec/install-skill.sh" ]]; then
+            exec bash "$script_dir/../libexec/install-skill.sh" "$@"
+        elif [[ -f "$script_dir/../share/deploy-slot/install-skill.sh" ]]; then
+            exec bash "$script_dir/../share/deploy-slot/install-skill.sh" "$@"
+        fi
+        fail 'Bundled skill installer is missing; reinstall deploy-slot.'
+        ;;
+    reserve|status)
+        (($# == 0)) || fail "Usage: deploy-slot $command"
+        ;;
+    release)
+        if (($# == 1)) && [[ "$1" == --force ]]; then
+            force=1
+        elif (($# != 0)); then
+            fail 'Usage: deploy-slot release [--force]'
+        fi
+        ;;
+    *) fail "Unknown command: $command" ;;
+esac
+
+caller=''
+if [[ "$command" == reserve || ( "$command" == release && "$force" == 0 ) ]]; then
+    resolve_owner
+fi
+command -v flock >/dev/null || fail 'flock is required; install util-linux.'
+default_state_dir=/var/lib/deploy-slot
+state_dir="${DEPLOY_SLOT_STATE_DIR:-$default_state_dir}"
+[[ -d "$state_dir" ]] || fail "State directory is missing: $state_dir. Run install.sh on this box."
+if ! { exec {lock_fd}>>"$state_dir/lock"; } 2>/dev/null; then
+    fail "Cannot access $state_dir/lock. Check installation and group membership."
+fi
+flock --exclusive "$lock_fd" || fail 'Cannot lock reservation state.'
+
+reservation_file="$state_dir/reservation"
+if [[ "$command" == release && "$force" == 1 ]]; then
+    rm -f -- "$reservation_file" || fail 'Cannot clear the reservation.'
+    printf 'Reservation cleared with --force.\n'
+    exit 0
+fi
+
+owner='' reserved_at='' login=''
+if [[ -e "$reservation_file" || -L "$reservation_file" ]]; then
+    [[ -f "$reservation_file" && ! -L "$reservation_file" ]] || fail 'Invalid reservation file.'
+    mapfile -t record < "$reservation_file" || fail 'Cannot read reservation state.'
+    ((${#record[@]} == 4)) || fail 'Corrupt reservation state; inspect it before release --force.'
+    [[ "${record[0]}" == v1 && "${record[1]}" =~ ^(codex|claude):[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$ &&
+       "${record[2]}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ && -n "${record[3]}" ]] ||
+        fail 'Corrupt reservation state; inspect it before release --force.'
+    owner="${record[1]}" reserved_at="${record[2]}" login="${record[3]}"
+fi
+
+case "$command" in
+    status)
+        if [[ -n "$owner" ]]; then
+            printf 'Reserved by %s since %s (SSH user: %s).\n' "$owner" "$reserved_at" "$login"
+        else
+            printf 'Available.\n'
+        fi
+        ;;
+    reserve)
+        if [[ -n "$owner" && "$owner" != "$caller" ]]; then
+            printf 'deploy-slot: Reserved by %s since %s (SSH user: %s).\n' "$owner" "$reserved_at" "$login" >&2
+            exit 1
+        fi
+        if [[ -z "$owner" ]]; then
+            reserved_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            login="$(id -un)"
+            temporary="$(mktemp "$state_dir/.reservation.XXXXXXXX")" || fail 'Cannot create reservation state.'
+            trap 'rm -f -- "$temporary"' EXIT
+            printf 'v1\n%s\n%s\n%s\n' "$caller" "$reserved_at" "$login" > "$temporary"
+            chmod 0660 "$temporary"
+            mv -f -- "$temporary" "$reservation_file" || fail 'Cannot save the reservation.'
+        fi
+        printf 'Reserved by %s since %s.\n' "$caller" "$reserved_at"
+        ;;
+    release)
+        if [[ -n "$owner" && "$owner" != "$caller" ]]; then
+            printf 'deploy-slot: Reserved by %s since %s; only that session can release it.\n' "$owner" "$reserved_at" >&2
+            exit 1
+        fi
+        rm -f -- "$reservation_file" || fail 'Cannot release the reservation.'
+        printf 'Released.\n'
+        ;;
+esac
