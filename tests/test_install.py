@@ -31,13 +31,16 @@ class HostInstallationTests(unittest.TestCase):
         cls.prefix = cls.root / "prefix with spaces"
         cls.state = cls.root / "state with $ spaces"
         cls.group = f"deploy-slot-{os.getpid()}"
-        cls.other_user = f"deployslot{os.getpid()}"
-        cls.first_user = pwd.getpwuid(os.getuid()).pw_name
-        cls.root_call(
-            "useradd", "--no-create-home", "--shell", "/bin/bash",
-            "--password", "*NP*", cls.other_user,
-        )
+        cls.first_user = f"deployslot{os.getpid()}a"
+        cls.other_user = f"deployslot{os.getpid()}b"
+        cls.created_users = []
         cls.addClassCleanup(cls.delete_user_and_group)
+        for user in (cls.first_user, cls.other_user):
+            cls.root_call(
+                "useradd", "--no-create-home", "--home-dir", cls.root,
+                "--shell", "/bin/bash", "--password", "*NP*", user,
+            )
+            cls.created_users.append(user)
         cls.install()
 
     @classmethod
@@ -49,8 +52,10 @@ class HostInstallationTests(unittest.TestCase):
 
     @classmethod
     def delete_user_and_group(cls):
-        cls.root_call("userdel", cls.other_user, check=False)
+        for user in cls.created_users:
+            cls.root_call("userdel", user, check=False)
         cls.root_call("groupdel", cls.group, check=False)
+        cls.root_call("rm", "-rf", "--", cls.root)
 
     @classmethod
     def install(cls):
