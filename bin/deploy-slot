@@ -12,14 +12,17 @@ usage() {
     cat <<'EOF'
 Usage: deploy-slot reserve
        deploy-slot status
+       deploy-slot check
        deploy-slot release [--force]
        deploy-slot install-skill [REPO]
 
 Reserves the machine this command runs on. Invoke it using ordinary SSH.
 Ownership comes from CODEX_THREAD_ID or CLAUDE_CODE_SESSION_ID.
 Reservations remain until released; deployment commands are not intercepted.
+Deploy scripts can run `deploy-slot check || exit` to require this session's reservation.
 
-Exit codes: 0 success, 1 owned by another session, 2 usage or operational error.
+Exit codes: 0 success, 1 owned by another session (or, for check, not reserved),
+2 usage or operational error.
 EOF
 }
 
@@ -58,7 +61,7 @@ case "$command" in
         fi
         fail 'Bundled skill installer is missing; reinstall deploy-slot.'
         ;;
-    reserve|status)
+    reserve|status|check)
         (($# == 0)) || fail "Usage: deploy-slot $command"
         ;;
     release)
@@ -72,7 +75,7 @@ case "$command" in
 esac
 
 caller=''
-if [[ "$command" == reserve || ( "$command" == release && "$force" == 0 ) ]]; then
+if [[ "$command" == reserve || "$command" == check || ( "$command" == release && "$force" == 0 ) ]]; then
     resolve_owner
 fi
 command -v flock >/dev/null || fail 'flock is required; install util-linux.'
@@ -125,6 +128,17 @@ case "$command" in
             mv -f -- "$temporary" "$reservation_file" || fail 'Cannot save the reservation.'
         fi
         printf 'Reserved by %s since %s.\n' "$caller" "$reserved_at"
+        ;;
+    check)
+        if [[ "$owner" == "$caller" ]]; then
+            printf 'Reserved by %s since %s.\n' "$caller" "$reserved_at"
+        elif [[ -n "$owner" ]]; then
+            printf 'deploy-slot: Reserved by %s since %s (SSH user: %s).\n' "$owner" "$reserved_at" "$login" >&2
+            exit 1
+        else
+            printf 'deploy-slot: Not reserved. Run deploy-slot reserve first.\n' >&2
+            exit 1
+        fi
         ;;
     release)
         if [[ -n "$owner" && "$owner" != "$caller" ]]; then
