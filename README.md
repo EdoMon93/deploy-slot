@@ -12,7 +12,7 @@ ssh production deploy-slot release
 
 Codex and Claude Code ownership comes from their existing session environment variables. There is no owner argument or token to retain. All SSH aliases and authorized users reaching the same box share one reservation.
 
-Reservations are advisory. Agents reserve before deployment preparation, keep the reservation through verification or rollback, and release afterward. The tool does not wrap SSH, alter deployment scripts, detect running deployments, expire reservations, or stop commands that bypass it.
+Reservations are advisory. Agents build, test and wait for CI first, reserve when they start preparing the deployment, keep the reservation through verification or rollback, and release afterward. The tool does not wrap SSH, alter deployment scripts, detect running deployments, or expire reservations. It stops a deployment that bypasses it only if the deployment script calls `deploy-slot check` (see [Guard a deploy script](#guard-a-deploy-script)).
 
 ## Install on the deployment box
 
@@ -55,13 +55,24 @@ See the [Claude Code environment reference](https://code.claude.com/docs/en/env-
 | --- | --- |
 | `deploy-slot reserve` | Atomically reserve this box. Repeating it as the owner preserves the original reservation. |
 | `deploy-slot status` | Show the owner, reservation time in UTC, and SSH user, or `Available`. No session identity is required. |
+| `deploy-slot check` | Succeed only if this session holds the reservation. Never creates one. |
 | `deploy-slot release` | Release this session's reservation. Releasing an empty slot succeeds. |
 | `deploy-slot release --force` | Clear an abandoned reservation without an owner check. Verify the previous deployment work has stopped first. |
 | `deploy-slot install-skill [REPO]` | Install the agent guidance into a Git repository; defaults to the current repository. |
 
-`reserve` and `release` exit with **1** when another session owns the box. Invalid input, missing identity, inaccessible state, or corrupt state produce an error and a nonzero exit; the ordinary CLI uses **2** for these errors. SSH transport errors have SSH's own exit status. A failed command does not establish availability. Checking status does not reserve the box.
+`reserve` and `release` exit with **1** when another session owns the box. `check` exits with **1** unless this session holds the reservation. Invalid input, missing identity, inaccessible state, or corrupt state produce an error and a nonzero exit; the ordinary CLI uses **2** for these errors. SSH transport errors have SSH's own exit status. A failed command does not establish availability. Checking status does not reserve the box.
 
 Ownership follows the provider session ID. A new session or Claude `/clear` can change that ID while a reservation is held. Finish deployment work before changing sessions; otherwise, verify it has stopped before force-releasing the abandoned reservation.
+
+## Guard a deploy script
+
+A deploy script run over the same SSH connection inherits the forwarded session ID. One line at its top makes the reservation required for the step that changes the box:
+
+```sh
+deploy-slot check || exit
+```
+
+`exit` without an argument keeps the status of `check`: 1 when this session does not hold the reservation, 2 for a missing identity or other error. `sudo` drops the session variables by default. If the script runs under `sudo`, call `check` before it or keep the variables with `sudo --preserve-env=CODEX_THREAD_ID,CLAUDE_CODE_SESSION_ID`.
 
 ## Install the skill into a repo
 

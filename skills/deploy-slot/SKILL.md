@@ -7,14 +7,17 @@ SSH_HOST is the SSH host alias used to connect to the deployment box.
 Run deploy-slot on the destination with ordinary SSH. All SSH aliases and
 users reaching that box share one reservation.
 
-Reserve before preparing deployment changes from the box's live
-configuration. Build and test code beforehand.
+Reserve when you are ready to prepare deployment changes from the box's
+live configuration, not earlier. Build, test and wait for CI to pass
+first. Holding the box while CI runs blocks every other session.
 
 Commands:
 - `ssh SSH_HOST deploy-slot reserve`: reserve for this session.
   Ownership comes from the forwarded Codex or Claude session ID.
   Fails if another session owns the box.
 - `ssh SSH_HOST deploy-slot status`: show the owner and reservation time.
+- `ssh SSH_HOST deploy-slot check`: succeeds only if this session holds the
+  reservation. Deploy scripts may call it and refuse to run otherwise.
 - `ssh SSH_HOST deploy-slot release`: release this session's reservation.
 - `ssh SSH_HOST deploy-slot release --force`: clear an abandoned reservation.
   Use only after verifying the previous owner's deployment work has stopped.

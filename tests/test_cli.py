@@ -68,6 +68,25 @@ class ReservationTests(unittest.TestCase):
         self.assertEqual(self.run_cli("release").returncode, 1)
         self.assertIn("claude:new-owner", self.run_cli("status", owner=None).stdout)
 
+    def test_check_passes_only_for_the_owner_and_never_reserves(self):
+        result = self.run_cli("check")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("Not reserved", result.stderr)
+        self.assertFalse((self.state / "reservation").exists())
+        self.assertEqual(self.run_cli("reserve").returncode, 0)
+        before = (self.state / "reservation").read_bytes()
+        result = self.run_cli("check")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("codex:thread-a", result.stdout)
+        result = self.run_cli("check", owner="claude:other-thread")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("codex:thread-a", result.stderr)
+        self.assertEqual((self.state / "reservation").read_bytes(), before)
+
+    def test_check_needs_an_identity(self):
+        self.assertEqual(self.run_cli("reserve").returncode, 0)
+        self.assertEqual(self.run_cli("check", owner=None).returncode, 2)
+
     def test_empty_release_is_idempotent(self):
         for _ in range(2):
             result = self.run_cli("release")
@@ -103,14 +122,14 @@ class ReservationTests(unittest.TestCase):
 
     def test_corrupt_state_fails_closed(self):
         (self.state / "reservation").write_text("garbage\n")
-        for command in ("reserve", "status", "release"):
+        for command in ("reserve", "status", "check", "release"):
             result = self.run_cli(command)
             self.assertEqual(result.returncode, 2, result.stderr)
             self.assertNotIn("Available", result.stdout)
         self.assertEqual(self.run_cli("release", "--force", owner=None).returncode, 0)
 
     def test_unknown_arguments_do_not_change_state(self):
-        for arguments in (("reserve", "some-box"), ("release", "--oops"), ("status", "--force")):
+        for arguments in (("reserve", "some-box"), ("release", "--oops"), ("status", "--force"), ("check", "--force")):
             result = self.run_cli(*arguments)
             self.assertEqual(result.returncode, 2, result.stderr)
             self.assertFalse((self.state / "reservation").exists())
