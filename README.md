@@ -45,9 +45,30 @@ AcceptEnv CODEX_THREAD_ID CLAUDE_CODE_SESSION_ID
 
 Validate with `sudo sshd -t`, then reload the SSH service using the command appropriate for the host. Start a new SSH connection after changing server configuration. If the host uses connection multiplexing, reconnect the master connection too.
 
-Codex provides `CODEX_THREAD_ID` in its shell environment. Current Claude Code supplies `CLAUDE_CODE_SESSION_ID` to Bash tool subprocesses. The destination detects whichever nonempty variable is present and records ownership as `codex:<id>` or `claude:<id>`. If both are present, it refuses an ambiguous identity. If neither is present, `reserve` and ordinary `release` fail. It never falls back to the SSH username or connection ID.
+Codex provides `CODEX_THREAD_ID` in its shell environment. Current Claude Code supplies `CLAUDE_CODE_SESSION_ID` to Bash tool subprocesses. The destination detects whichever nonempty variable is present and records ownership as `codex:<id>` or `claude:<id>`. If both are present, it refuses an ambiguous identity. If none of these or a job ID is present, `reserve` and ordinary `release` fail. It never falls back to the SSH username or connection ID.
 
 See the [Claude Code environment reference](https://code.claude.com/docs/en/env-vars), [OpenSSH SendEnv reference](https://man.openbsd.org/ssh_config#SendEnv), and [AcceptEnv reference](https://man.openbsd.org/sshd_config#AcceptEnv).
+
+## Manual deployment jobs
+
+A button or script without an agent session can supply `DEPLOY_SLOT_JOB_ID`. Generate one unique ID per run,
+keep it for every command in that deployment, and unset any inherited provider identities. The reservation
+is recorded as `job:<id>` and competes with agent sessions in the same shared slot. Mixed identities are refused.
+The ID follows the same validation rules as provider IDs and is not a secret.
+
+Pass it explicitly on each remote command to avoid changing SSH server configuration:
+
+```sh
+unset CODEX_THREAD_ID CLAUDE_CODE_SESSION_ID
+job_id="$(cat /proc/sys/kernel/random/uuid)"
+ssh production env DEPLOY_SLOT_JOB_ID="$job_id" deploy-slot reserve
+ssh production env DEPLOY_SLOT_JOB_ID="$job_id" deploy-slot check
+ssh production env DEPLOY_SLOT_JOB_ID="$job_id" deploy-slot release
+```
+
+The command that performs the deployment must inherit the same variable, so any nested `deploy-slot check`
+uses the job's identity. A lost connection or cancelled job does not release its reservation. Inspect the
+job and host before recovering or clearing an abandoned reservation.
 
 ## Commands
 

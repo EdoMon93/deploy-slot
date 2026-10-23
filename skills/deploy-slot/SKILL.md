@@ -14,7 +14,8 @@ first. Holding the box while CI runs blocks every other session.
 Commands:
 - `ssh SSH_HOST deploy-slot reserve`: reserve for this session.
   Ownership comes from the forwarded Codex or Claude session ID.
-  Fails if another session owns the box.
+  Manual jobs may instead pass DEPLOY_SLOT_JOB_ID explicitly to every remote command, with provider IDs unset.
+  Fails if another session or job owns the box.
 - `ssh SSH_HOST deploy-slot status`: show the owner and reservation time.
 - `ssh SSH_HOST deploy-slot check`: succeeds only if this session holds the
   reservation. Deploy scripts may call it and refuse to run otherwise.

@@ -17,7 +17,7 @@ Usage: deploy-slot reserve
        deploy-slot install-skill [REPO]
 
 Reserves the machine this command runs on. Invoke it using ordinary SSH.
-Ownership comes from CODEX_THREAD_ID or CLAUDE_CODE_SESSION_ID.
+Ownership comes from CODEX_THREAD_ID, CLAUDE_CODE_SESSION_ID or DEPLOY_SLOT_JOB_ID.
 Reservations remain until released; deployment commands are not intercepted.
 Deploy scripts can run `deploy-slot check || exit` to require this session's reservation.
 
@@ -27,9 +27,16 @@ EOF
 }
 
 resolve_owner() {
-    local codex="${CODEX_THREAD_ID:-}" claude="${CLAUDE_CODE_SESSION_ID:-}" identity
-    if [[ -n "$codex" && -n "$claude" ]]; then
-        fail 'Both provider session IDs are present; unset the inherited ID of the other provider.'
+    local codex="${CODEX_THREAD_ID:-}" claude="${CLAUDE_CODE_SESSION_ID:-}"
+    local job="${DEPLOY_SLOT_JOB_ID:-}" identity count=0
+    [[ -z "$codex" ]] || ((count += 1))
+    [[ -z "$claude" ]] || ((count += 1))
+    [[ -z "$job" ]] || ((count += 1))
+    if ((count > 1)); then
+        fail 'Multiple deployment identities are present; keep only one provider session or job ID.'
+    elif [[ -n "$job" ]]; then
+        identity="$job"
+        caller="job:$identity"
     elif [[ -n "$claude" ]]; then
         identity="$claude"
         caller="claude:$identity"
@@ -37,7 +44,7 @@ resolve_owner() {
         identity="$codex"
         caller="codex:$identity"
     else
-        fail 'Missing session identity. Forward CODEX_THREAD_ID or CLAUDE_CODE_SESSION_ID through SSH.'
+        fail 'Missing session identity. Forward CODEX_THREAD_ID or CLAUDE_CODE_SESSION_ID, or set DEPLOY_SLOT_JOB_ID.'
     fi
     [[ "$identity" =~ ^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$ ]] || fail 'Invalid provider session ID.'
 }
@@ -99,7 +106,7 @@ if [[ -e "$reservation_file" || -L "$reservation_file" ]]; then
     [[ -f "$reservation_file" && ! -L "$reservation_file" ]] || fail 'Invalid reservation file.'
     mapfile -t record < "$reservation_file" || fail 'Cannot read reservation state.'
     ((${#record[@]} == 4)) || fail 'Corrupt reservation state; inspect it before release --force.'
-    [[ "${record[0]}" == v1 && "${record[1]}" =~ ^(codex|claude):[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$ &&
+    [[ "${record[0]}" == v1 && "${record[1]}" =~ ^(codex|claude|job):[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$ &&
        "${record[2]}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ && -n "${record[3]}" ]] ||
         fail 'Corrupt reservation state; inspect it before release --force.'
     owner="${record[1]}" reserved_at="${record[2]}" login="${record[3]}"
