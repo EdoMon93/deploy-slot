@@ -8,7 +8,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "bin/deploy-slot"
-IDENTITY_VARIABLES = ("CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID")
+IDENTITY_VARIABLES = ("CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "DEPLOY_SLOT_JOB_ID")
 
 
 class ReservationTests(unittest.TestCase):
@@ -25,14 +25,14 @@ class ReservationTests(unittest.TestCase):
         environment = self.environment.copy()
         if owner:
             provider, identity = owner.split(":", 1)
-            variable = "CODEX_THREAD_ID" if provider == "codex" else "CLAUDE_CODE_SESSION_ID"
+            variable = {"codex": "CODEX_THREAD_ID", "claude": "CLAUDE_CODE_SESSION_ID", "job": "DEPLOY_SLOT_JOB_ID"}[provider]
             environment[variable] = identity
         return subprocess.run(
             ["bash", str(CLI), *arguments], env=environment, text=True, capture_output=True
         )
 
     def test_lifecycle_with_both_providers(self):
-        for owner in ("codex:thread-a", "claude:thread-b"):
+        for owner in ("codex:thread-a", "claude:thread-b", "job:deploy-123"):
             with self.subTest(owner=owner):
                 result = self.run_cli("reserve", owner=owner)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -102,6 +102,23 @@ class ReservationTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2)
         self.assertFalse((self.state / "reservation").exists())
+
+    def test_job_conflicts_with_agents_and_other_jobs(self):
+        self.assertEqual(self.run_cli("reserve", owner="job:deploy-one").returncode, 0)
+        before = (self.state / "reservation").read_bytes()
+        for owner in ("codex:thread", "claude:session", "job:deploy-two"):
+            for command in ("reserve", "check", "release"):
+                result = self.run_cli(command, owner=owner)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual((self.state / "reservation").read_bytes(), before)
+        self.assertEqual(self.run_cli("check", owner="job:deploy-one").returncode, 0)
+
+    def test_job_with_provider_identity_is_rejected(self):
+        for provider in ("CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID"):
+            environment = self.environment | {provider: "session", "DEPLOY_SLOT_JOB_ID": "job-one"}
+            result = subprocess.run(["bash", str(CLI), "reserve"], env=environment, capture_output=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertFalse((self.state / "reservation").exists())
 
     def test_invalid_identity_cannot_write_a_record(self):
         for identity in ("bad\nidentity", "bad identity", "x" * 257):

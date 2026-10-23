@@ -47,7 +47,7 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin yes
 AllowUsers {cls.username}
-AcceptEnv CODEX_THREAD_ID CLAUDE_CODE_SESSION_ID
+AcceptEnv CODEX_THREAD_ID CLAUDE_CODE_SESSION_ID DEPLOY_SLOT_JOB_ID
 SetEnv DEPLOY_SLOT_STATE_DIR={cls.state}
 LogLevel ERROR
 """)
@@ -68,7 +68,7 @@ LogLevel ERROR
     GlobalKnownHostsFile /dev/null
     LogLevel ERROR
 Host first-alias second-alias
-    SendEnv CODEX_THREAD_ID CLAUDE_CODE_SESSION_ID
+    SendEnv CODEX_THREAD_ID CLAUDE_CODE_SESSION_ID DEPLOY_SLOT_JOB_ID
 """)
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
@@ -93,11 +93,11 @@ Host first-alias second-alias
 
     def remote(self, host, *arguments, owner="codex:ssh-thread"):
         environment = os.environ.copy()
-        for name in ("CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "DEPLOY_SLOT_STATE_DIR"):
+        for name in ("CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "DEPLOY_SLOT_JOB_ID", "DEPLOY_SLOT_STATE_DIR"):
             environment.pop(name, None)
         if owner:
             provider, identity = owner.split(":", 1)
-            variable = "CODEX_THREAD_ID" if provider == "codex" else "CLAUDE_CODE_SESSION_ID"
+            variable = {"codex": "CODEX_THREAD_ID", "claude": "CLAUDE_CODE_SESSION_ID", "job": "DEPLOY_SLOT_JOB_ID"}[provider]
             environment[variable] = identity
         command = shlex.join([str(ROOT / "bin/deploy-slot"), *arguments])
         return subprocess.run(
@@ -120,6 +120,14 @@ Host first-alias second-alias
         result = self.remote("second-alias", "reserve", owner="claude:another-session")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("claude:another-session", result.stdout)
+
+    def test_job_identity_over_ssh_shares_agent_reservations(self):
+        result = self.remote("first-alias", "reserve", owner="job:button-one")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("job:button-one", result.stdout)
+        self.assertEqual(self.remote("second-alias", "check", owner="job:button-one").returncode, 0)
+        self.assertEqual(self.remote("second-alias", "reserve").returncode, 1)
+        self.assertEqual(self.remote("second-alias", "release", owner="job:button-one").returncode, 0)
 
     def test_missing_forwarding_fails_without_reserving(self):
         result = self.remote("no-identity", "reserve")
